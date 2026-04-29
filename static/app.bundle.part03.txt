@@ -1,0 +1,300 @@
+        const dropdownItems = document.querySelectorAll('.dropdown-item');
+        dropdownItems.forEach(item => {
+            const mode = item.getAttribute('data-mode');
+            if (mode === this.currentMode) {
+                item.classList.add('active');
+            } else {
+                item.classList.remove('active');
+            }
+        });
+        
+        // 更新发送按钮状态
+        if (this.sendButton) {
+            this.sendButton.disabled = this.isStreaming;
+        }
+        
+        // 更新输入框状态
+        if (this.messageInput) {
+            this.messageInput.disabled = this.isStreaming;
+            this.messageInput.placeholder = '问问智能OnCall助手';
+        }
+    }
+
+    // 生成随机会话ID
+    generateSessionId() {
+        return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    }
+
+    // 发送消息
+    async sendMessage() {
+        let message = '';
+        if (this.messageInput) {
+            message = this.messageInput.value.trim();
+        }
+        
+        if (!message) {
+            this.showNotification('请输入消息内容', 'warning');
+            return;
+        }
+
+        if (this.isStreaming) {
+            this.showNotification('请等待当前对话完成', 'warning');
+            return;
+        }
+
+        // 显示用户消息
+        this.addMessage('user', message);
+        
+        // 清空输入框
+        if (this.messageInput) {
+            this.messageInput.value = '';
+        }
+
+        // 设置发送状态
+        this.isStreaming = true;
+        this.updateUI();
+
+        try {
+            if (this.currentMode === 'quick') {
+                await this.sendQuickMessage(message);
+            } else if (this.currentMode === 'stream') {
+                await this.sendStreamMessage(message);
+            }
+        } catch (error) {
+            console.error('发送消息失败:', error);
+            this.addMessage('assistant', '抱歉，发送消息时出现错误：' + error.message);
+        } finally {
+            this.isStreaming = false;
+            this.updateUI();
+            
+            // 如果当前对话是从历史记录加载的，更新历史记录
+            if (this.isCurrentChatFromHistory && this.currentChatHistory.length > 0) {
+                this.updateCurrentChatHistory();
+                this.renderChatHistory(); // 更新历史对话列表显示
+            }
+        }
+    }
+
+    // 发送快速消息（普通对话）
+    async sendQuickMessage(message) {
+        // 添加等待提示消息
+        const loadingMessage = this.addLoadingMessage('正在思考...');
+        
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/chat`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    Id: this.sessionId,
+                    Question: message
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
+            }
+
+            const data = await response.json();
+            console.log('[sendQuickMessage] 响应数据:', JSON.stringify(data));
+            
+            // 移除等待提示消息
+            if (loadingMessage && loadingMessage.parentNode) {
+                loadingMessage.parentNode.removeChild(loadingMessage);
+            }
+            
+            // 统一响应格式：检查 data.code 或 data.message 判断请求是否成功
+            if (data.code === 200 || data.message === 'success') {
+                // data.data 是 ChatResponse 对象
+                const chatResponse = data.data;
+                
+                if (chatResponse && chatResponse.success) {
+                    // 成功：添加实际响应消息（即使 answer 为空也显示）
+                    const answer = chatResponse.answer || '（无回复内容）';
+                    this.addMessage('assistant', answer);
+                } else if (chatResponse && chatResponse.errorMessage) {
+                    // 业务错误
+                    throw new Error(chatResponse.errorMessage);
+                } else {
+                    // 兜底：尝试显示任何可用内容
+                    const fallbackAnswer = chatResponse?.answer || chatResponse?.errorMessage || '服务返回了空内容';
+                    this.addMessage('assistant', fallbackAnswer);
+                }
+            } else {
+                // HTTP 成功但业务失败
+                throw new Error(data.message || '请求失败');
+            }
+        } catch (error) {
+            // 出错时也要移除等待提示消息
+            if (loadingMessage && loadingMessage.parentNode) {
+                loadingMessage.parentNode.removeChild(loadingMessage);
+            }
+            throw error;
+        }
+    }
+
+    // 发送流式消息
+    async sendStreamMessage(message) {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/chat_stream`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    Id: this.sessionId,
+                    Question: message
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
+            }
+            
+            // 创建助手消息元素
+            const assistantMessageElement = this.addMessage('assistant', '', true);
+            let fullResponse = '';
+
+            // 处理流式响应
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let currentEvent = '';
+
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        // 流结束，使用统一的处理方法
+                        this.handleStreamComplete(assistantMessageElement, fullResponse);
+                        break;
+                    }
+
+                    // 解码数据并添加到缓冲区
+                    buffer += decoder.decode(value, { stream: true });
+                    
+                    // 按行分割处理
+                    const lines = buffer.split('\n');
+                    // 保留最后一行（可能不完整）
+                    buffer = lines.pop() || '';
+                    
+                    for (const line of lines) {
+                        if (line.trim() === '') continue;
+                        
+                        console.log('[SSE调试] 收到行:', line);
+                        
+                        // 解析SSE格式
+                        if (line.startsWith('id:')) {
+                            console.log('[SSE调试] 解析到ID');
+                            continue;
+                        } else if (line.startsWith('event:')) {
+                            // 兼容 "event:message" 和 "event: message" 两种格式
+                            currentEvent = line.substring(6).trim();
+                            console.log('[SSE调试] 解析到事件类型:', currentEvent);
+                            // 注意：后端统一使用 "message" 事件名，真正的类型在 data 的 JSON 中
+                            continue;
+                        } else if (line.startsWith('data:')) {
+                            // 兼容 "data:xxx" 和 "data: xxx" 两种格式
+                            const rawData = line.substring(5).trim();
+                            console.log('[SSE调试] 解析到数据, currentEvent:', currentEvent, ', rawData:', rawData);
+                            
+                            // 兼容旧格式 [DONE] 标记
+                            if (rawData === '[DONE]') {
+                                // 流结束标记，将内容转换为Markdown渲染
+                                this.handleStreamComplete(assistantMessageElement, fullResponse);
+                                return;
+                            }
+                            
+                            // 处理 SSE 数据
+                            try {
+                                // 尝试解析为 SseMessage 格式的 JSON
+                                const sseMessage = JSON.parse(rawData);
+                                console.log('[SSE调试] 解析JSON成功:', sseMessage);
+                                
+                                if (sseMessage && typeof sseMessage.type === 'string') {
+                                    if (sseMessage.type === 'content') {
+                                        const content = sseMessage.data || '';
+                                        fullResponse += content;
+                                        console.log('[SSE调试] 添加内容:', content);
+                                        
+                                        // 实时渲染 Markdown
+                                        if (assistantMessageElement) {
+                                            const messageContent = assistantMessageElement.querySelector('.message-content');
+                                            messageContent.innerHTML = this.renderMarkdown(fullResponse);
+                                            // 高亮代码块
+                                            this.highlightCodeBlocks(messageContent);
+                                            this.scrollToBottom();
+                                        }
+                                    } else if (sseMessage.type === 'done') {
+                                        console.log('[SSE调试] 收到done标记，流结束');
+                                        this.handleStreamComplete(assistantMessageElement, fullResponse);
+                                        return;
+                                    } else if (sseMessage.type === 'error') {
+                                        console.error('[SSE调试] 收到错误:', sseMessage.data);
+                                        if (assistantMessageElement) {
+                                            const messageContent = assistantMessageElement.querySelector('.message-content');
+                                            messageContent.innerHTML = this.renderMarkdown('错误: ' + (sseMessage.data || '未知错误'));
+                                        }
+                                        return;
+                                    }
+                                } else {
+                                    // 不是标准 SseMessage 格式，尝试兼容处理
+                                    console.log('[SSE调试] 非标准格式，尝试兼容处理');
+                                    fullResponse += rawData;
+                                    if (assistantMessageElement) {
+                                        const messageContent = assistantMessageElement.querySelector('.message-content');
+                                        messageContent.innerHTML = this.renderMarkdown(fullResponse);
+                                        this.highlightCodeBlocks(messageContent);
+                                        this.scrollToBottom();
+                                    }
+                                }
+                            } catch (e) {
+                                // JSON 解析失败，尝试兼容旧格式
+                                console.log('[SSE调试] JSON解析失败，使用兼容模式:', e.message);
+                                if (rawData === '') {
+                                    fullResponse += '\n';
+                                } else {
+                                    fullResponse += rawData;
+                                }
+                                
+                                if (assistantMessageElement) {
+                                    const messageContent = assistantMessageElement.querySelector('.message-content');
+                                    messageContent.innerHTML = this.renderMarkdown(fullResponse);
+                                    this.highlightCodeBlocks(messageContent);
+                                    this.scrollToBottom();
+                                }
+                            }
+                        }
+                    }
+                }
+            } finally {
+                reader.releaseLock();
+            }
+        } catch (error) {
+            throw error;
+        }
+    }
+
+    // 添加消息到聊天界面
+    addMessage(type, content, isStreaming = false, saveToHistory = true) {
+        // 检查是否是第一条消息，如果是则移除居中样式
+        const isFirstMessage = this.chatMessages && this.chatMessages.querySelectorAll('.message').length === 0;
+        
+        // 保存消息到当前对话历史（如果不是流式消息且需要保存）
+        if (!isStreaming && saveToHistory && content) {
+            this.currentChatHistory.push({
+                type: type,
+                content: content,
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${type}${isStreaming ? ' streaming' : ''}`;
+
+        // 如果是assistant消息，添加头像图标
+        if (type === 'assistant') {
+            const messageAvatar = document.createElement('div');
+            messageAvatar.className = 'message-avatar';
