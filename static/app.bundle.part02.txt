@@ -1,0 +1,300 @@
+        const title = firstUserMessage ? 
+            (firstUserMessage.content.substring(0, 30) + (firstUserMessage.content.length > 30 ? '...' : '')) : 
+            '新对话';
+        
+        const chatHistory = {
+            id: this.sessionId,
+            title: title,
+            messages: [...this.currentChatHistory],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+        
+        // 添加到历史记录列表的开头
+        this.chatHistories.unshift(chatHistory);
+        
+        // 限制历史记录数量（最多保存50条）
+        if (this.chatHistories.length > 50) {
+            this.chatHistories = this.chatHistories.slice(0, 50);
+        }
+        
+        // 保存到localStorage
+        this.saveChatHistories();
+    }
+    
+    // 更新当前对话的历史记录
+    updateCurrentChatHistory() {
+        if (this.currentChatHistory.length === 0) {
+            return;
+        }
+        
+        const existingIndex = this.chatHistories.findIndex(h => h.id === this.sessionId);
+        if (existingIndex === -1) {
+            // 如果不存在，调用保存方法
+            this.saveCurrentChat();
+            return;
+        }
+        
+        // 更新现有的历史记录
+        const history = this.chatHistories[existingIndex];
+        history.messages = [...this.currentChatHistory];
+        history.updatedAt = new Date().toISOString();
+        
+        // 如果标题需要更新（第一条消息改变了）
+        const firstUserMessage = this.currentChatHistory.find(msg => msg.type === 'user');
+        if (firstUserMessage) {
+            const newTitle = firstUserMessage.content.substring(0, 30) + (firstUserMessage.content.length > 30 ? '...' : '');
+            if (history.title !== newTitle) {
+                history.title = newTitle;
+            }
+        }
+        
+        // 保存到localStorage
+        this.saveChatHistories();
+    }
+    
+    // 加载历史对话列表
+    loadChatHistories() {
+        try {
+            const stored = localStorage.getItem('chatHistories');
+            return stored ? JSON.parse(stored) : [];
+        } catch (e) {
+            console.error('加载历史对话失败:', e);
+            return [];
+        }
+    }
+    
+    // 保存历史对话列表到localStorage
+    saveChatHistories() {
+        try {
+            localStorage.setItem('chatHistories', JSON.stringify(this.chatHistories));
+        } catch (e) {
+            console.error('保存历史对话失败:', e);
+        }
+    }
+    
+    // 渲染历史对话列表
+    renderChatHistory() {
+        if (!this.chatHistoryList) {
+            return;
+        }
+        
+        this.chatHistoryList.innerHTML = '';
+        
+        if (this.chatHistories.length === 0) {
+            return;
+        }
+        
+        this.chatHistories.forEach((history, index) => {
+            const historyItem = document.createElement('div');
+            historyItem.className = 'history-item';
+            historyItem.dataset.historyId = history.id;
+            
+            historyItem.innerHTML = `
+                <div class="history-item-content">
+                    <span class="history-item-title">${this.escapeHtml(history.title)}</span>
+                </div>
+                <button class="history-item-delete" data-history-id="${history.id}" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            `;
+            
+            // 点击历史项加载对话
+            historyItem.addEventListener('click', (e) => {
+                if (!e.target.closest('.history-item-delete')) {
+                    this.loadChatHistory(history.id);
+                }
+            });
+            
+            // 删除历史对话
+            const deleteBtn = historyItem.querySelector('.history-item-delete');
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.deleteChatHistory(history.id);
+            });
+            
+            this.chatHistoryList.appendChild(historyItem);
+        });
+    }
+    
+    // 加载历史对话
+    async loadChatHistory(historyId) {
+        const history = this.chatHistories.find(h => h.id === historyId);
+        if (!history) {
+            return;
+        }
+        
+        // 如果当前有对话内容，且不是同一个对话，先保存
+        if (this.currentChatHistory.length > 0 && this.sessionId !== historyId) {
+            if (this.isCurrentChatFromHistory) {
+                // 如果当前对话也是从历史记录加载的，更新它
+                this.updateCurrentChatHistory();
+            } else {
+                // 如果当前对话是新对话，保存为新历史
+                this.saveCurrentChat();
+            }
+        }
+        
+        try {
+            // 从后端获取会话历史
+            const response = await fetch(`/api/chat/session/${historyId}`);
+            if (response.ok) {
+                const data = await response.json();
+                const backendHistory = data.history || [];
+                
+                // 更新会话ID
+                this.sessionId = history.id;
+                this.isCurrentChatFromHistory = true;
+                
+                // 清空并重新渲染消息
+                if (this.chatMessages) {
+                    this.chatMessages.innerHTML = '';
+                    
+                    // 如果后端有历史记录，使用后端的
+                    if (backendHistory.length > 0) {
+                        this.currentChatHistory = [];
+                        backendHistory.forEach(msg => {
+                            // 后端返回格式: {role: "user|assistant", content: "...", timestamp: "..."}
+                            const messageType = msg.role === 'user' ? 'user' : 'bot';
+                            this.addMessage(messageType, msg.content, false, false);
+                        });
+                    } else {
+                        // 否则使用localStorage的历史记录
+                        this.currentChatHistory = [...history.messages];
+                        history.messages.forEach(msg => {
+                            this.addMessage(msg.type, msg.content, false, false);
+                        });
+                    }
+                }
+            } else {
+                // 如果后端请求失败，使用localStorage的历史记录
+                console.warn('从后端加载历史失败，使用本地缓存');
+                this.sessionId = history.id;
+                this.currentChatHistory = [...history.messages];
+                this.isCurrentChatFromHistory = true;
+                
+                if (this.chatMessages) {
+                    this.chatMessages.innerHTML = '';
+                    history.messages.forEach(msg => {
+                        this.addMessage(msg.type, msg.content, false, false);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('加载会话历史失败:', error);
+            // 出错时使用localStorage的历史记录
+            this.sessionId = history.id;
+            this.currentChatHistory = [...history.messages];
+            this.isCurrentChatFromHistory = true;
+            
+            if (this.chatMessages) {
+                this.chatMessages.innerHTML = '';
+                history.messages.forEach(msg => {
+                    this.addMessage(msg.type, msg.content, false, false);
+                });
+            }
+        }
+        
+        // 更新UI
+        this.checkAndSetCentered();
+        this.renderChatHistory();
+    }
+    
+    // 删除历史对话
+    async deleteChatHistory(historyId) {
+        try {
+            // 调用后端API清空会话
+            const response = await fetch('/api/chat/clear', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: historyId
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('清空会话失败');
+            }
+
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                // 从本地存储中删除
+                this.chatHistories = this.chatHistories.filter(h => h.id !== historyId);
+                this.saveChatHistories();
+                this.renderChatHistory();
+                
+                // 如果删除的是当前对话，清空当前对话
+                if (this.sessionId === historyId) {
+                    this.currentChatHistory = [];
+                    if (this.chatMessages) {
+                        this.chatMessages.innerHTML = '';
+                    }
+                    this.sessionId = this.generateSessionId();
+                    this.checkAndSetCentered();
+                }
+                
+                this.showNotification('会话已清空', 'success');
+            } else {
+                throw new Error(result.message || '清空会话失败');
+            }
+        } catch (error) {
+            console.error('删除历史对话失败:', error);
+            this.showNotification('删除失败: ' + error.message, 'error');
+        }
+    }
+
+    // 切换模式下拉菜单
+    toggleModeDropdown() {
+        if (this.modeSelectorBtn && this.modeDropdown) {
+            const wrapper = this.modeSelectorBtn.closest('.mode-selector-wrapper');
+            if (wrapper) {
+                wrapper.classList.toggle('active');
+            }
+        }
+    }
+
+    // 关闭模式下拉菜单
+    closeModeDropdown() {
+        if (this.modeSelectorBtn && this.modeDropdown) {
+            const wrapper = this.modeSelectorBtn.closest('.mode-selector-wrapper');
+            if (wrapper) {
+                wrapper.classList.remove('active');
+            }
+        }
+    }
+
+    // 选择模式
+    selectMode(mode) {
+        if (this.isStreaming) {
+            this.showNotification('请等待当前对话完成后再切换模式', 'warning');
+            return;
+        }
+        
+        this.currentMode = mode;
+        this.updateUI();
+        
+        const modeNames = {
+            'quick': '快速',
+            'stream': '流式'
+        };
+        
+        this.showNotification(`已切换到${modeNames[mode]}模式`, 'info');
+    }
+
+    // 更新UI
+    updateUI() {
+        // 更新模式选择器显示
+        if (this.currentModeText) {
+            const modeNames = {
+                'quick': '快速',
+                'stream': '流式'
+            };
+            this.currentModeText.textContent = modeNames[this.currentMode] || '快速';
+        }
+        
+        // 更新下拉菜单选中状态
