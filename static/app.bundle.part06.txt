@@ -1,0 +1,191 @@
+        
+        this.scrollToBottom();
+        return messageElement;
+    }
+
+    // 添加智能运维消息（带折叠详情）- 保留用于兼容性
+    addAIOpsMessage(response, details) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant aiops-message';
+
+        // 添加头像图标
+        const messageAvatar = document.createElement('div');
+        messageAvatar.className = 'message-avatar';
+        messageAvatar.innerHTML = `
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/>
+            </svg>
+        `;
+        messageDiv.appendChild(messageAvatar);
+
+        // 创建消息内容包装器
+        const messageContentWrapper = document.createElement('div');
+        messageContentWrapper.className = 'message-content-wrapper';
+
+        // 详情部分（可折叠）- 先显示
+        if (details && details.length > 0) {
+            const detailsContainer = document.createElement('div');
+            detailsContainer.className = 'aiops-details';
+
+            const detailsToggle = document.createElement('div');
+            detailsToggle.className = 'details-toggle';
+            detailsToggle.innerHTML = `
+                <svg class="toggle-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M9 18L15 12L9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>查看详细步骤 (${details.length}条)</span>
+            `;
+
+            const detailsContent = document.createElement('div');
+            detailsContent.className = 'details-content';
+            
+            details.forEach((detail, index) => {
+                const detailItem = document.createElement('div');
+                detailItem.className = 'detail-item';
+                detailItem.innerHTML = `<strong>步骤 ${index + 1}:</strong> ${this.escapeHtml(detail)}`;
+                detailsContent.appendChild(detailItem);
+            });
+
+            // 点击切换折叠状态
+            detailsToggle.addEventListener('click', () => {
+                detailsContent.classList.toggle('expanded');
+                detailsToggle.classList.toggle('expanded');
+            });
+
+            detailsContainer.appendChild(detailsToggle);
+            detailsContainer.appendChild(detailsContent);
+            messageContentWrapper.appendChild(detailsContainer);
+        }
+
+        // 主要响应内容 - 后显示（使用Markdown渲染）
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content';
+        messageContent.innerHTML = this.renderMarkdown(response);
+        // 高亮代码块
+        this.highlightCodeBlocks(messageContent);
+        messageContentWrapper.appendChild(messageContent);
+        messageDiv.appendChild(messageContentWrapper);
+        
+        if (this.chatMessages) {
+            this.chatMessages.appendChild(messageDiv);
+            this.scrollToBottom();
+        }
+
+        return messageDiv;
+    }
+
+    // HTML转义
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // 触发智能运维（点击智能运维按钮时直接调用）
+    async triggerAIOps() {
+        if (this.isStreaming) {
+            this.showNotification('请等待当前操作完成', 'warning');
+            return;
+        }
+
+        // 新建对话
+        this.newChat();
+        
+        // 添加"分析中..."的消息（带旋转动画）
+        const loadingMessage = this.addLoadingMessage('分析中...');
+        this.currentAIOpsMessage = loadingMessage; // 保存消息引用用于后续更新
+        
+        // 设置发送状态
+        this.isStreaming = true;
+        this.updateUI();
+
+        try {
+            await this.sendAIOpsRequest(loadingMessage);
+        } catch (error) {
+            console.error('智能运维分析失败:', error);
+            // 更新消息为错误信息
+            if (loadingMessage) {
+                const messageContent = loadingMessage.querySelector('.message-content');
+                if (messageContent) {
+                    messageContent.textContent = '抱歉，智能运维分析时出现错误：' + error.message;
+                }
+            }
+        } finally {
+            this.isStreaming = false;
+            this.currentAIOpsMessage = null;
+            this.updateUI();
+        }
+    }
+
+    // 显示/隐藏加载遮罩层
+    showLoadingOverlay(show) {
+        if (this.loadingOverlay) {
+            if (show) {
+                this.loadingOverlay.style.display = 'flex';
+                // 更新文字为智能运维
+                const loadingText = this.loadingOverlay.querySelector('.loading-text');
+                const loadingSubtext = this.loadingOverlay.querySelector('.loading-subtext');
+                if (loadingText) loadingText.textContent = '智能运维分析中，请稍候...';
+                if (loadingSubtext) loadingSubtext.textContent = '后端正在处理，请耐心等待';
+                // 防止页面滚动
+                document.body.style.overflow = 'hidden';
+            } else {
+                this.loadingOverlay.style.display = 'none';
+                // 恢复页面滚动
+                document.body.style.overflow = '';
+            }
+        }
+    }
+
+    // 显示/隐藏上传遮罩层
+    showUploadOverlay(show, fileName = '') {
+        if (this.loadingOverlay) {
+            if (show) {
+                this.loadingOverlay.style.display = 'flex';
+                // 更新文字为上传中
+                const loadingText = this.loadingOverlay.querySelector('.loading-text');
+                const loadingSubtext = this.loadingOverlay.querySelector('.loading-subtext');
+                if (loadingText) loadingText.textContent = '正在上传文件...';
+                if (loadingSubtext) loadingSubtext.textContent = fileName ? `上传: ${fileName}` : '请稍候';
+                // 防止页面滚动
+                document.body.style.overflow = 'hidden';
+            } else {
+                this.loadingOverlay.style.display = 'none';
+                // 恢复页面滚动
+                document.body.style.overflow = '';
+            }
+        }
+    }
+}
+
+// 添加CSS动画
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideIn {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+    
+    @keyframes slideOut {
+        from {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        to {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+    }
+`;
+document.head.appendChild(style);
+
+// 初始化应用
+document.addEventListener('DOMContentLoaded', () => {
+    new SuperBizAgentApp();
+});
