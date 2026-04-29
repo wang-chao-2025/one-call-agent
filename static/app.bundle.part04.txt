@@ -1,0 +1,300 @@
+            messageAvatar.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/>
+                </svg>
+            `;
+            messageDiv.appendChild(messageAvatar);
+        }
+
+        // 创建消息内容包装器
+        const messageContentWrapper = document.createElement('div');
+        messageContentWrapper.className = 'message-content-wrapper';
+
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content';
+        
+        // 如果是assistant消息且不是流式消息，使用Markdown渲染
+        if (type === 'assistant' && !isStreaming) {
+            messageContent.innerHTML = this.renderMarkdown(content);
+            // 高亮代码块
+            this.highlightCodeBlocks(messageContent);
+        } else {
+            // 用户消息或流式消息使用纯文本
+            messageContent.textContent = content;
+        }
+
+        messageContentWrapper.appendChild(messageContent);
+        messageDiv.appendChild(messageContentWrapper);
+
+        if (this.chatMessages) {
+            this.chatMessages.appendChild(messageDiv);
+            
+            // 如果是第一条消息，移除居中样式并添加动画
+            if (isFirstMessage && this.chatContainer) {
+                this.chatContainer.classList.remove('centered');
+                // 添加动画类
+                this.chatContainer.style.transition = 'all 0.5s ease';
+            }
+            
+            this.scrollToBottom();
+        }
+
+        return messageDiv;
+    }
+
+    // 添加带加载动画的消息
+    addLoadingMessage(content) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant';
+
+        // 添加头像图标
+        const messageAvatar = document.createElement('div');
+        messageAvatar.className = 'message-avatar';
+        messageAvatar.innerHTML = `
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/>
+            </svg>
+        `;
+        messageDiv.appendChild(messageAvatar);
+
+        // 创建消息内容包装器
+        const messageContentWrapper = document.createElement('div');
+        messageContentWrapper.className = 'message-content-wrapper';
+
+        const messageContent = document.createElement('div');
+        messageContent.className = 'message-content loading-message-content';
+        
+        // 创建文本和动画容器
+        const textSpan = document.createElement('span');
+        textSpan.textContent = content;
+        
+        // 创建旋转动画图标
+        const loadingIcon = document.createElement('span');
+        loadingIcon.className = 'loading-spinner-icon';
+        loadingIcon.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="currentColor" opacity="0.2"/>
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10c1.54 0 3-.36 4.28-1l-1.5-2.6C13.64 19.62 12.84 20 12 20c-4.41 0-8-3.59-8-8s3.59-8 8-8c.84 0 1.64.38 2.18 1l1.5-2.6C13 2.36 12.54 2 12 2z" fill="currentColor"/>
+            </svg>
+        `;
+        
+        messageContent.appendChild(textSpan);
+        messageContent.appendChild(loadingIcon);
+        messageContentWrapper.appendChild(messageContent);
+        messageDiv.appendChild(messageContentWrapper);
+
+        if (this.chatMessages) {
+            this.chatMessages.appendChild(messageDiv);
+            
+            // 如果是第一条消息，移除居中样式
+            const isFirstMessage = this.chatMessages.querySelectorAll('.message').length === 1;
+            if (isFirstMessage && this.chatContainer) {
+                this.chatContainer.classList.remove('centered');
+                this.chatContainer.style.transition = 'all 0.5s ease';
+            }
+            
+            this.scrollToBottom();
+        }
+
+        return messageDiv;
+    }
+    
+    // 检查并设置居中样式
+    checkAndSetCentered() {
+        if (this.chatMessages && this.chatContainer) {
+            const hasMessages = this.chatMessages.querySelectorAll('.message').length > 0;
+            if (!hasMessages) {
+                this.chatContainer.classList.add('centered');
+            } else {
+                this.chatContainer.classList.remove('centered');
+            }
+        }
+    }
+
+    // 滚动到底部
+    scrollToBottom() {
+        if (this.chatMessages) {
+            this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+        }
+    }
+
+    // 处理流式传输完成
+    handleStreamComplete(assistantMessageElement, fullResponse) {
+        if (assistantMessageElement) {
+            assistantMessageElement.classList.remove('streaming');
+            const messageContent = assistantMessageElement.querySelector('.message-content');
+            if (messageContent) {
+                messageContent.innerHTML = this.renderMarkdown(fullResponse);
+                // 高亮代码块
+                this.highlightCodeBlocks(messageContent);
+            }
+        }
+        // 保存流式消息到历史记录
+        if (fullResponse) {
+            this.currentChatHistory.push({
+                type: 'assistant',
+                content: fullResponse,
+                timestamp: new Date().toISOString()
+            });
+            // 如果当前对话是从历史记录加载的，更新历史记录
+            if (this.isCurrentChatFromHistory) {
+                this.updateCurrentChatHistory();
+                this.renderChatHistory();
+            }
+        }
+    }
+
+    // 显示通知
+    showNotification(message, type = 'info') {
+        // 创建通知元素
+        const notification = document.createElement('div');
+        notification.className = `notification ${type}`;
+        notification.textContent = message;
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 10000;
+            animation: slideIn 0.3s ease;
+            max-width: 300px;
+        `;
+
+        // 根据类型设置颜色（Google Material Design配色）
+        const colors = {
+            info: '#1a73e8',
+            success: '#34a853',
+            warning: '#fbbc04',
+            error: '#ea4335'
+        };
+        notification.style.backgroundColor = colors[type] || colors.info;
+
+        // 添加到页面
+        document.body.appendChild(notification);
+
+        // 3秒后自动移除
+        setTimeout(() => {
+            notification.style.animation = 'slideOut 0.3s ease';
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }, 3000);
+    }
+
+    // 处理文件选择
+    handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (file) {
+            // 验证文件格式
+            if (!this.validateFileType(file)) {
+                this.showNotification('只支持上传 TXT 或 Markdown (.md) 格式的文件', 'error');
+                this.fileInput.value = '';
+                return;
+            }
+            this.uploadFile(file);
+        }
+    }
+
+    // 验证文件类型
+    validateFileType(file) {
+        const fileName = file.name.toLowerCase();
+        const allowedExtensions = ['.txt', '.md', '.markdown'];
+        return allowedExtensions.some(ext => fileName.endsWith(ext));
+    }
+
+    // 上传文件到知识库
+    async uploadFile(file) {
+        // 再次验证文件类型（双重保险）
+        if (!this.validateFileType(file)) {
+            this.showNotification('只支持上传 TXT 或 Markdown (.md) 格式的文件', 'error');
+            return;
+        }
+
+        // 验证文件大小（限制为50MB）
+        const maxSize = 50 * 1024 * 1024;
+        if (file.size > maxSize) {
+            this.showNotification('文件大小不能超过50MB', 'error');
+            return;
+        }
+
+        // 锁定前端并显示上传遮罩层
+        this.isStreaming = true;
+        this.updateUI();
+        this.showUploadOverlay(true, file.name);
+
+        try {
+            // 创建 FormData
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // 发送上传请求
+            const response = await fetch(`${this.apiBaseUrl}/upload`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if ((data.code === 200 || data.message === 'success') && data.data) {
+                // 在聊天界面显示上传成功消息
+                const successMessage = `${file.name} 上传到知识库成功`;
+                this.addMessage('assistant', successMessage, false, true);
+            } else {
+                throw new Error(data.message || '上传失败');
+            }
+        } catch (error) {
+            console.error('文件上传失败:', error);
+            this.showNotification('文件上传失败: ' + error.message, 'error');
+        } finally {
+            // 清空文件输入
+            if (this.fileInput) {
+                this.fileInput.value = '';
+            }
+            // 解锁前端
+            this.isStreaming = false;
+            this.showUploadOverlay(false);
+            this.updateUI();
+        }
+    }
+
+    // 格式化文件大小
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    // 发送智能运维请求（SSE 流式模式）
+    async sendAIOpsRequest(loadingMessageElement) {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/aiops`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: this.sessionId
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP错误: ${response.status}`);
+            }
+
+            let fullResponse = '';
+
+            // 处理 SSE 流式响应
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
