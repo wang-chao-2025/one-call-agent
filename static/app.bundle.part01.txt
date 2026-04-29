@@ -1,0 +1,300 @@
+// SuperBizAgent 前端应用
+class SuperBizAgentApp {
+    constructor() {
+        this.apiBaseUrl = 'http://localhost:9900/api';
+        this.currentMode = 'quick'; // 'quick' 或 'stream'
+        this.sessionId = this.generateSessionId();
+        this.isStreaming = false;
+        this.currentChatHistory = []; // 当前对话的消息历史
+        this.chatHistories = this.loadChatHistories(); // 所有历史对话
+        this.isCurrentChatFromHistory = false; // 标记当前对话是否是从历史记录加载的
+        
+        this.initializeElements();
+        this.bindEvents();
+        this.updateUI();
+        this.initMarkdown();
+        this.checkAndSetCentered();
+        this.renderChatHistory();
+    }
+
+    // 初始化Markdown配置
+    initMarkdown() {
+        // 等待 marked 库加载完成
+        const checkMarked = () => {
+            if (typeof marked !== 'undefined') {
+                try {
+                    // 配置marked选项
+                    marked.setOptions({
+                        breaks: true,  // 支持GFM换行
+                        gfm: true,     // 启用GitHub风格的Markdown
+                        headerIds: false,
+                        mangle: false
+                    });
+
+                    // 配置代码高亮
+                    if (typeof hljs !== 'undefined') {
+                        marked.setOptions({
+                            highlight: function(code, lang) {
+                                if (lang && hljs.getLanguage(lang)) {
+                                    try {
+                                        return hljs.highlight(code, { language: lang }).value;
+                                    } catch (err) {
+                                        console.error('代码高亮失败:', err);
+                                    }
+                                }
+                                return code;
+                            }
+                        });
+                    }
+                    console.log('Markdown 渲染库初始化成功');
+                } catch (e) {
+                    console.error('Markdown 配置失败:', e);
+                }
+            } else {
+                // 如果 marked 还没加载，等待一段时间后重试
+                setTimeout(checkMarked, 100);
+            }
+        };
+        checkMarked();
+    }
+
+    // 安全地渲染 Markdown
+    renderMarkdown(content) {
+        if (!content) return '';
+        
+        // 检查 marked 是否可用
+        if (typeof marked === 'undefined') {
+            console.warn('marked 库未加载，使用纯文本显示');
+            return this.escapeHtml(content);
+        }
+        
+        try {
+            const html = marked.parse(content);
+            return html;
+        } catch (e) {
+            console.error('Markdown 渲染失败:', e);
+            return this.escapeHtml(content);
+        }
+    }
+
+    // 高亮代码块
+    highlightCodeBlocks(container) {
+        if (typeof hljs !== 'undefined' && container) {
+            try {
+                container.querySelectorAll('pre code').forEach((block) => {
+                    if (!block.classList.contains('hljs')) {
+                        hljs.highlightElement(block);
+                    }
+                });
+            } catch (e) {
+                console.error('代码高亮失败:', e);
+            }
+        }
+    }
+
+    // 初始化DOM元素
+    initializeElements() {
+        // 侧边栏元素
+        this.sidebar = document.querySelector('.sidebar');
+        this.newChatBtn = document.getElementById('newChatBtn');
+        this.aiOpsSidebarBtn = document.getElementById('aiOpsSidebarBtn');
+        
+        // 输入区域元素
+        this.messageInput = document.getElementById('messageInput');
+        this.sendButton = document.getElementById('sendButton');
+        this.toolsBtn = document.getElementById('toolsBtn');
+        this.toolsMenu = document.getElementById('toolsMenu');
+        this.uploadFileItem = document.getElementById('uploadFileItem');
+        this.modeSelectorBtn = document.getElementById('modeSelectorBtn');
+        this.modeDropdown = document.getElementById('modeDropdown');
+        this.currentModeText = document.getElementById('currentModeText');
+        this.fileInput = document.getElementById('fileInput');
+        
+        // 聊天区域元素
+        this.chatMessages = document.getElementById('chatMessages');
+        this.loadingOverlay = document.getElementById('loadingOverlay');
+        this.chatContainer = document.querySelector('.chat-container');
+        this.welcomeGreeting = document.getElementById('welcomeGreeting');
+        this.chatHistoryList = document.getElementById('chatHistoryList');
+        
+        // 初始化时检查是否需要居中
+        this.checkAndSetCentered();
+    }
+
+    // 绑定事件监听器
+    bindEvents() {
+        // 新建对话
+        if (this.newChatBtn) {
+            this.newChatBtn.addEventListener('click', () => this.newChat());
+        }
+        
+        // AI Ops按钮
+        if (this.aiOpsSidebarBtn) {
+            this.aiOpsSidebarBtn.addEventListener('click', () => this.triggerAIOps());
+        }
+        
+        // 模式选择下拉菜单
+        if (this.modeSelectorBtn) {
+            this.modeSelectorBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleModeDropdown();
+            });
+        }
+        
+        // 下拉菜单项点击
+        const dropdownItems = document.querySelectorAll('.dropdown-item');
+        dropdownItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                const mode = item.getAttribute('data-mode');
+                this.selectMode(mode);
+                this.closeModeDropdown();
+            });
+        });
+        
+        // 点击外部关闭下拉菜单
+        document.addEventListener('click', (e) => {
+            if (!this.modeSelectorBtn.contains(e.target) && 
+                !this.modeDropdown.contains(e.target)) {
+                this.closeModeDropdown();
+            }
+        });
+        
+        // 发送消息
+        if (this.sendButton) {
+            this.sendButton.addEventListener('click', () => this.sendMessage());
+        }
+        
+        if (this.messageInput) {
+            this.messageInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.sendMessage();
+                }
+            });
+        }
+        
+        // 工具按钮和菜单
+        if (this.toolsBtn) {
+            this.toolsBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleToolsMenu();
+            });
+        }
+        
+        // 工具菜单项点击事件
+        if (this.uploadFileItem) {
+            this.uploadFileItem.addEventListener('click', () => {
+                if (this.fileInput) {
+                    this.fileInput.click();
+                }
+                this.closeToolsMenu();
+            });
+        }
+        
+        // 点击外部关闭工具菜单
+        document.addEventListener('click', (e) => {
+            if (this.toolsBtn && this.toolsMenu && 
+                !this.toolsBtn.contains(e.target) && 
+                !this.toolsMenu.contains(e.target)) {
+                this.closeToolsMenu();
+            }
+        });
+        
+        if (this.fileInput) {
+            this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
+        }
+    }
+
+    // 切换工具菜单显示/隐藏
+    toggleToolsMenu() {
+        if (this.toolsMenu && this.toolsBtn) {
+            const wrapper = this.toolsBtn.closest('.tools-btn-wrapper');
+            if (wrapper) {
+                wrapper.classList.toggle('active');
+            }
+        }
+    }
+
+    // 关闭工具菜单
+    closeToolsMenu() {
+        if (this.toolsMenu && this.toolsBtn) {
+            const wrapper = this.toolsBtn.closest('.tools-btn-wrapper');
+            if (wrapper) {
+                wrapper.classList.remove('active');
+            }
+        }
+    }
+
+    // 新建对话
+    newChat() {
+        if (this.isStreaming) {
+            this.showNotification('请等待当前对话完成后再新建对话', 'warning');
+            return;
+        }
+        
+        // 如果当前有对话内容，且不是从历史记录加载的，才保存为新的历史对话
+        // 如果是从历史记录加载的，只需要更新该历史记录
+        if (this.currentChatHistory.length > 0) {
+            if (this.isCurrentChatFromHistory) {
+                // 当前对话是从历史记录加载的，更新该历史记录
+                this.updateCurrentChatHistory();
+            } else {
+                // 当前对话是新对话，保存为新的历史对话
+                this.saveCurrentChat();
+            }
+        }
+        
+        // 停止所有进行中的操作
+        this.isStreaming = false;
+        
+        // 清空输入框
+        if (this.messageInput) {
+            this.messageInput.value = '';
+        }
+        
+        // 清空当前对话历史
+        this.currentChatHistory = [];
+        
+        // 重置标记
+        this.isCurrentChatFromHistory = false;
+        
+        // 清空聊天记录
+        if (this.chatMessages) {
+            this.chatMessages.innerHTML = '';
+        }
+        
+        // 生成新的会话ID
+        this.sessionId = this.generateSessionId();
+        
+        // 重置模式为快速
+        this.currentMode = 'quick';
+        this.updateUI();
+        
+        // 重新设置居中样式（确保对话框居中显示）
+        this.checkAndSetCentered();
+        
+        // 确保容器有过渡动画
+        if (this.chatContainer) {
+            this.chatContainer.style.transition = 'all 0.5s ease';
+        }
+        
+        // 更新历史对话列表
+        this.renderChatHistory();
+    }
+    
+    // 保存当前对话到历史记录（新建）
+    saveCurrentChat() {
+        if (this.currentChatHistory.length === 0) {
+            return;
+        }
+        
+        // 检查是否已存在相同ID的历史记录
+        const existingIndex = this.chatHistories.findIndex(h => h.id === this.sessionId);
+        if (existingIndex !== -1) {
+            // 如果已存在，更新而不是新建
+            this.updateCurrentChatHistory();
+            return;
+        }
+        
+        // 获取对话标题（使用第一条用户消息的前30个字符）
+        const firstUserMessage = this.currentChatHistory.find(msg => msg.type === 'user');
